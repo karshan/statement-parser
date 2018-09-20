@@ -96,6 +96,32 @@ amountP = do
     let amt = num * 100 + decimal
     return $ maybe amt (const (-amt)) negM
 
+zeroToThreeDigitNum :: Parser Int
+zeroToThreeDigitNum = foldl (\a e -> (a * 10) + e) 0 <$> scan 3
+    where
+        scan :: Int -> Parser [Int]
+        scan 0 = return []
+        scan n =
+            try $ do
+                x <- digitToInt <$> digit
+                xs <- scan (n - 1)
+                return (x:xs)
+            <|>
+            return []
+
+-- Chase encode 0.25 as .25
+chaseAmountP :: Parser Amount
+chaseAmountP = do
+    negM <- optionMaybe (char '-')
+    dollarSignM <- optionMaybe (char '$')
+    n1 <- zeroToThreeDigitNum
+    num <- try (char ',' *> (foldl (\a e -> (a * 1000) + e) n1 <$> sepBy1 threeDigitNum (char ',')))
+            <|> return n1
+    char '.'
+    decimal <- twoDigitNum
+    let amt = num * 100 + decimal
+    return $ maybe amt (const (-amt)) negM
+
 manyTill' :: Parser a -> Parser end -> Parser ([a], end)
 manyTill' p end = scan
     where
@@ -132,10 +158,19 @@ bofaCreditTxn year = do
     (desc, amount) <- manyTill' anyChar (try (skipMany1 (oneOf " \t") *> amountP))
     return $ Txn (txnDate ++ "/" ++ year) (intercalate " " (words desc)) amount
 
+chaseCreditTxn :: String -> Parser Txn
+chaseCreditTxn year = do
+    spaces
+    txnDate <- mdDateP
+    spaces
+    (desc, amount) <- manyTill' anyChar (try (skipMany1 (oneOf " \t") *> chaseAmountP))
+    eof
+    return $ Txn (txnDate ++ "/" ++ year) (intercalate " " (words desc)) amount
+
 parseTxns :: String -> String -> IO [Txn]
 parseTxns f year = do
     s <- readFile f
-    return $ concat $ rights $ map (parse bofaDebitTxnAndMaybeCheck "_") (T.lines s)
+    return $ rights $ map (parse (chaseCreditTxn year) "_") (T.lines s)
     --return $ rights $ map (parse (bofaCreditTxn year) "_") (T.lines s)
 
 parseAndEncode :: String -> String -> IO ()
